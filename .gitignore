@@ -1,0 +1,21 @@
+# data & activations (large; see README for download instructions)
+data/100x50_imageNet_val_random/
+activations/
+results/
+*.pt
+*.npy
+*.pkl
+*.h5
+*.ckpt*
+
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+.ipynb_checkpoints/
+
+# environments / editors
+.venv/
+.vscode/
+.idea/
+.DS_Store

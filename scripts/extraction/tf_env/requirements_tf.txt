@@ -1,0 +1,21 @@
+# Separate environment for the TensorFlow models (ConvRNN, BL/B).
+# These are TF1-era codebases and are NOT compatible with the main
+# PyTorch environment. Tested with Python 3.6 (3.7 should also work —
+# TF 1.13.1 ships wheels for both).
+#
+#   conda create -n repgeo-tf python=3.6
+#   conda activate repgeo-tf
+#   pip install -r requirements_tf.txt
+#   # GPU (optional): tensorflow-gpu==1.13.1 + cudatoolkit=10.0 cudnn=7.6.5
+#
+# Model code (clone separately, see README):
+#   convrnns: https://github.com/neuroailab/convrnns   (+ get_checkpoints.sh)
+#   rcnn-sat: https://github.com/cjspoerer/rcnn-sat    (pip install -e .)
+
+tensorflow==1.13.1
+numpy<1.17           # TF 1.13 compatibility
+# torch is only used for the dataloader and .pt serialization; CPU build is fine
+torch
+torchvision
+pillow
+tqdm

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "repgeo"
+version = "0.1.0"
+description = "Representational geometry analysis of recurrent vision models (Luo, Alvarez & Konkle, CCN 2026)"
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=2.0",
+    "torchvision",
+    "numpy",
+    "scipy",
+    "pandas",
+    "scikit-learn",
+    "statsmodels",
+    "matplotlib",
+    "plotly",
+]
+
+[project.optional-dependencies]
+extraction = ["open_clip_torch", "huggingface_hub"]
+
+[tool.setuptools]
+packages = ["repgeo"]

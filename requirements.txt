@@ -1,0 +1,15 @@
+# Easiest setup — from the repo root, run:
+#
+#     pip install -e .
+#
+# That installs the repgeo package and every analysis dependency, and makes
+# `import repgeo` work from anywhere (notebooks, scripts, your own code).
+#
+# If you also want to extract activations yourself (CLIP, robust ResNet):
+#
+#     pip install -e ".[extraction]"
+#
+# The TF models (ConvRNN, BL/B) need a separate environment — see
+# scripts/extraction/tf_env/requirements_tf.txt.
+
+-e .[extraction]
