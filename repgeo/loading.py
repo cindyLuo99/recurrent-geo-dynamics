@@ -56,7 +56,7 @@ def _load_lrm_lra(root, suffix, key):
 
 
 def _load_cornet(root, suffix):
-    # timesteps stacked in one file; t=3 baseline, t=4 after
+    # timesteps stacked in one file, 0-indexed: index 3 baseline, index 4 after
     logits = _load(f"{root}/CORnet-RT/activations_tmax7_logits1k_{suffix}.pt")
     feats = _load(f"{root}/CORnet-RT/activations_tmax7_feats512_{suffix}.pt")
     return {
@@ -66,7 +66,7 @@ def _load_cornet(root, suffix):
 
 
 def _load_convrnn(root, suffix):
-    # rgc_intermediate: t=16 (tprev) baseline, t=17 (tlast) after
+    # rgc_intermediate, 0-indexed: tprev = step 15 baseline, tlast = step 16 after
     cr, layer = "rgc_intermediate", "conv10"
     return {
         "logits": {
@@ -81,7 +81,7 @@ def _load_convrnn(root, suffix):
 
 
 def _load_bl(root, suffix):
-    # t=0 (pure feedforward sweep) baseline, t=7 after
+    # 0-indexed: step 0 (pure feedforward sweep) baseline, step 7 after
     bl, layer = "bl_imagenet", "ReLU_Layer_6"
     return {
         "logits": {

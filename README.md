@@ -139,13 +139,12 @@ Per-model dependencies:
 
 > **Note on LRA3.** The LRA3 model definition lives in a not-yet-public part
 > of the lrm-steering codebase, so re-extracting LRA3 activations from
-> scratch is currently not possible from public code (`--model lra3` will
+> scratch is currently not available from public code (`--model lra3` will
 > tell you the same). This does **not** affect reproducibility of any LRA3
 > result: the released activation bundle includes all LRA3 activations, and
 > the entire analysis pipeline runs from those.
 
-Baseline/after conventions: LRM3/LRA3 pass 1 vs pass 3; CORnet-RT t=3 vs
-t=4; ConvRNN t=16 vs t=17; BL t=0 (pure feedforward sweep) vs t=7.
+See "Timestep conventions" below for which step is `baseline` vs `after`.
 
 ### 3. Extract activations — TensorFlow environment (ConvRNN, BL/B)
 
@@ -171,6 +170,30 @@ python scripts/extraction/extract_untrained_torch.py \
     --dataset ./data/100x50_imageNet_val_random \
     --output ./activations/untrained
 ```
+
+## Timestep conventions
+
+Due to 0/1-indexing, a given processing step can appear to be off by one between the paper and the extraction code. To prevent potential confusion, both conventions are tabulated below. Time steps reported in
+the paper follow each model's original publication (usually 1-based numbering),
+whereas time steps in the extraction scripts and saved activation files
+follow each model's original released code (typically 0-based indexing). This repository adheres to each original
+source without modification.
+
+| Model | Stage | Paper *t* | Code index | Step described |
+|---|---|---|---|---|
+| LRM3 / LRA3 | baseline | pass 1 | pass 1 | initial feedforward pass |
+| | after | pass 3 | pass 3 | after two feedback cycles (modulated pass) |
+| BL | baseline | t = 1 | t = 0 | purely feedforward sweep, before lateral recurrence |
+| | after | t = 8 | t = 7 | final step of the eight-step unroll (fully recurred) |
+| CORnet-RT | baseline | t = 4 | t = 3 | first image-driven IT state |
+| | after | t = 5 | t = 4 | first step at which IT recurs on an image-driven state |
+| ConvRNN | baseline | t = 16 | t = 15 | second-to-last step of the 17-step unroll |
+| | after | t = 17 | t = 16 | final step |
+| ConvRNN (Fig. 4) | image-on | t = 12 | t = 11 | last input-driven step (image presentation ends afterward) |
+| | after | t = 17 | t = 16 | final step |
+
+LRM and LRA are parameterized by pass count rather than time-step index, and
+therefore read identically under both conventions.
 
 ## Figure map
 
