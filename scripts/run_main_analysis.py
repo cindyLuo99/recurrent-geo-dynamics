@@ -36,7 +36,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from repgeo.loading import load_features, sanity_check
 from repgeo.analysis import (
     compute_cluster_sizes_and_rdms, build_prototype_rdms, accuracy_table,
-    geometry_summary_table,
+    geometry_summary_table, local_global_composite, rsa_mds_composite, build_mds_coords,
+    top1_accuracy_bars,
 )
 from repgeo.stats import run_local_lme_tests, run_global_permutation_tests
 from repgeo import plotting as P
@@ -104,21 +105,25 @@ def main():
                             show_stats=False, show=False)
     P.plot_separation_ridge_dual(between_pen, between_log,
                                  save_path=fig("between_class_dual.pdf"), show=False)
+    composite_log = local_global_composite(
+        features, labels, rep="logits", rep_overrides={"CORnet-RT": "penult"})
     P.plot_local_global_composite(
-        features, labels, rep="logits", rep_overrides={"CORnet-RT": "penult"},
-        save_path=fig("local_global_composite_logits.pdf"), show=False)
+        composite_log, save_path=fig("local_global_composite_logits.pdf"), show=False)
+    composite_pen = local_global_composite(features, labels, rep="penult")
     P.plot_local_global_composite(
-        features, labels, rep="penult",
-        save_path=fig("local_global_composite_penult.pdf"), show=False)
-    P.plot_top1_accuracy_bars(features, labels,
-                              save_path=fig("top1_accuracy_bars.pdf"), show=False)
-    P.plot_rsa_mds_composite(between_log, between_pen, rdms_log, rdms_pen,
-                             save_path=fig("rsa_mds_composite.svg"), show=False)
+        composite_pen, save_path=fig("local_global_composite_penult.pdf"), show=False)
+    bars = top1_accuracy_bars(features, labels)
+    P.plot_top1_accuracy_bars(bars, save_path=fig("top1_accuracy_bars.pdf"), show=False)
+
+    rsa_mds = rsa_mds_composite(between_log, between_pen, rdms_log, rdms_pen)
+    P.plot_rsa_mds_composite(rsa_mds, save_path=fig("rsa_mds_composite.svg"), show=False)
     try:
-        P.plot_model_mds_3d(rdms_log, "Model MDS 3-D — LOGITS",
-                            save_html=fig("model_mds_3d_logits.html"), show=False)
-        P.plot_model_mds_3d(rdms_pen, "Model MDS 3-D — PENULTIMATE",
-                            save_html=fig("model_mds_3d_penult.html"), show=False)
+        for rdms, tag, name in [(rdms_log, "logits", "LOGITS"),
+                                (rdms_pen, "penult", "PENULTIMATE")]:
+            names3, coords3, _, stress3 = build_mds_coords(rdms, n_components=3)
+            P.plot_model_mds_3d(names3, coords3, f"Model MDS 3-D — {name}",
+                                stress=stress3,
+                                save_html=fig(f"model_mds_3d_{tag}.html"), show=False)
     except ImportError:
         print("plotly not installed — skipping 3-D MDS html figures.")
 

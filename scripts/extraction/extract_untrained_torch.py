@@ -66,6 +66,8 @@ def build_untrained(name):
         ctor, _, _, _ = FEEDFORWARD[name]
         return ctor(weights=None)
     if name == "lrm3":
+        # ':dev' is intentional — public repo, but only :dev constructs
+        # alexnet_lrm3 correctly (main raises). See extract_torch_models.run_lrm_lra.
         model, _ = torch.hub.load("cindyluo99/lrm-steering:dev", "alexnet_lrm3",
                                   pretrained=False, steering=False)
         return model

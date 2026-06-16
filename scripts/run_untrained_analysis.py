@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from repgeo.untrained import (
     load_untrained_features, compute_seeded_between_dict, geometry_summary_seeded,
+    local_global_composite_seeded,
 )
 from repgeo.plotting import (
     plot_separation_ridge_multiseed, plot_local_global_composite_seeded,
@@ -72,10 +73,12 @@ def main():
             save_path=os.path.join(args.figures, f"ridge_untrained_{rep}.pdf"),
             show=False)
 
-    # ---- local/global composite (PCA on representative seed 0) ----
-    plot_local_global_composite_seeded(
+    # ---- local/global composite (analysis first; PCA on representative seed) ----
+    composite = local_global_composite_seeded(
         seeded, labels, rep="logits", rep_overrides={"CORnet-RT": "penult"},
-        seed_for_pca=args.seeds[0], band="sd",
+        seed_for_pca=args.seeds[0])
+    plot_local_global_composite_seeded(
+        composite, band="sd",
         save_path=os.path.join(args.figures, "local_global_composite_untrained.pdf"),
         show=False)
 

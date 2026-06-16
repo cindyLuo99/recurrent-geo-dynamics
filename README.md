@@ -173,7 +173,7 @@ python scripts/extraction/extract_untrained_torch.py \
 
 ## Timestep conventions
 
-Due to 0/1-indexing, a given processing step can appear to be off by one between the paper and the extraction code. To prevent potential confusion, both conventions are tabulated below. Time steps reported in
+Due to 0/1-indexing, a given processing step can appear to be off by one between the paper and the extraction code. To prevent potential confusion, both conventions are listed in the table below. Time steps reported in
 the paper follow each model's original publication (usually 1-based numbering),
 whereas time steps in the extraction scripts and saved activation files
 follow each model's original released code (typically 0-based indexing). This repository adheres to each original
@@ -210,4 +210,5 @@ therefore read identically under both conventions.
 
 ## Acknowledgments
 
-Code organization and review were assisted by Claude Fable 5.
+Code organization and review were assisted by Claude (Fable 5 and Opus 4.8).
+All code in this repository was fully reviewed by the author.

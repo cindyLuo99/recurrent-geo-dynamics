@@ -124,7 +124,20 @@ def run_resnet50_robust(args, idx2number):
         raise RuntimeError(f"robust ckpt mismatch: missing={loadable[:5]}, "
                            f"unexpected={list(unexpected)[:5]}")
 
-    transform = models.ResNet50_Weights.DEFAULT.transforms()
+    # MadryLab's native ImageNet test pipeline, NOT torchvision's default
+    # (ResNet50_Weights.DEFAULT is the V2 recipe with resize_size=232). The
+    # robustness library uses TEST_TRANSFORMS_IMAGENET = Resize(256)/CenterCrop
+    # (224)/ToTensor (robustness/data_augmentation.py) and normalizes inside the
+    # model via InputNormalize (x -> (clamp(x,0,1) - mean)/std). We load bare
+    # weights (the in-model normalizer is stripped above), so the identical
+    # ImageNet normalization is folded into the transform here. Verified: the
+    # 232->256 change leaves the decision-stage between-prototype distribution
+    # essentially unchanged (mean 0.811, flat — not near-orthogonal).
+    import torchvision.transforms as T
+    transform = T.Compose([
+        T.Resize(256), T.CenterCrop(224), T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
     loader = create_dataloader(args.dataset, transform, idx2number,
                                args.batch_size, args.num_workers)
     logits, penult, labels, acc = extract_feedforward(model, loader)
@@ -238,6 +251,10 @@ def run_lrm_lra(key, args, idx2number):
                      logits="backbone.classifier.6"),
     }[key]
 
+    # NOTE: pin the ':dev' branch. The repo is public (so :dev is publicly
+    # loadable), and only :dev's lrm_models/ code constructs alexnet_lrm3
+    # correctly — the default 'main' branch raises during construction
+    # (get_layer_shapes returns a list, not tensors). Do not drop ':dev'.
     if key == "lrm3":
         model, tfs = torch.hub.load("cindyluo99/lrm-steering:dev", "alexnet_lrm3",
                                     pretrained=True, steering=False)

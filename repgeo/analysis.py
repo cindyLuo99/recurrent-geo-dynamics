@@ -12,14 +12,16 @@ tensor-level metrics from repgeo.geometry, so results are identical
 whether you use these wrappers or call the metrics yourself.
 """
 
+import numpy as np
 import pandas as pd
 import torch
 
-from .config import MODEL_ORDER, RECURRENT_MODELS, DEFAULT_REP, REP_OVERRIDES
+from .config import (MODEL_ORDER, RECURRENT_MODELS, DEFAULT_REP, REP_OVERRIDES,
+                     ordered_model_names)
 from .geometry import (
     compute_prototypes, exemplar_proto_dists, rdm_cosine, rdm_vec_upper,
     effective_dimension, nearest_centroid_accuracy, logit_accuracy,
-    pair_geometry_metrics, to_feat,
+    pair_geometry_metrics, to_feat, category_preservation_knn, prototype_shifts,
 )
 
 
@@ -66,6 +68,157 @@ def build_prototype_rdms(features, labels, rep="logits"):
         tag: rdm_cosine(compute_prototypes(X, labels, classes))
         for tag, _, _, X in iter_states(features, rep)
     }
+
+
+def local_global_composite(features, labels, rep="logits",
+                           models=tuple(RECURRENT_MODELS), rep_overrides=None):
+    """Inputs for the local/global composite figure (paper Fig. 1), rendered by
+    plotting.plot_local_global_composite.
+
+    For each recurrent model that has both states (at its rep), returns a dict:
+      delta         [N]    per-exemplar cluster-size change (d_after - d_before)
+      pca_baseline  [C, 2] baseline prototypes projected into the PCA space of
+                           the baseline activations
+      pca_after     [C, 2] after prototypes in that SAME PCA space
+      rep           str    the layer used for this model
+    """
+    from sklearn.decomposition import PCA
+
+    rep_overrides = rep_overrides or {}
+    labels_t = torch.as_tensor(labels)
+    classes = torch.unique(labels_t, sorted=True).tolist()
+
+    out = {}
+    for model in models:
+        m_rep = rep_overrides.get(model, rep)
+        rd = features.get(model, {}).get(m_rep, {})
+        if "baseline" not in rd or "after" not in rd:
+            continue
+        X_b = to_feat(rd["baseline"]).float()
+        X_a = to_feat(rd["after"]).float()
+        prot_b = compute_prototypes(X_b, labels_t, classes)
+        prot_a = compute_prototypes(X_a, labels_t, classes)
+        d_b = exemplar_proto_dists(X_b, prot_b, labels_t, metric="cosine")
+        d_a = exemplar_proto_dists(X_a, prot_a, labels_t, metric="cosine")
+        pca = PCA(n_components=2).fit(X_b.cpu().numpy())
+        out[model] = {
+            "delta": d_a - d_b,
+            "pca_baseline": pca.transform(prot_b.cpu().numpy()),
+            "pca_after": pca.transform(prot_a.cpu().numpy()),
+            "rep": m_rep,
+        }
+    return out
+
+
+def build_rsa_matrix(between_dict, exclude=()):
+    """K x K Spearman-rho matrix across models from between-prototype vectors.
+    Returns (names, [K, K] matrix)."""
+    from scipy.stats import spearmanr
+
+    names = [n for n in ordered_model_names(between_dict.keys())
+             if n.split()[0] not in exclude]
+    K = len(names)
+    vecs = [between_dict[n] for n in names]
+    rsa = np.zeros((K, K), dtype=np.float32)
+    for i in range(K):
+        for j in range(K):
+            rho, _ = spearmanr(vecs[i], vecs[j])
+            rsa[i, j] = np.nan_to_num(rho)
+    return names, rsa
+
+
+def build_mds_coords(rdms, seed=42, exclude=(), n_components=2):
+    """MDS embedding of models; distance = 1 - Spearman rho between RDMs.
+    Returns (names, coords [K, n_components], D [K, K], stress)."""
+    from scipy.stats import spearmanr
+    from sklearn.manifold import MDS
+
+    names = [n for n in ordered_model_names(rdms.keys())
+             if n.split()[0] not in exclude]
+    K = len(names)
+    vecs = [rdm_vec_upper(rdms[n]) for n in names]
+    D = np.zeros((K, K))
+    for i in range(K):
+        for j in range(i + 1, K):
+            rho, _ = spearmanr(vecs[i], vecs[j])
+            D[i, j] = D[j, i] = 1.0 - np.nan_to_num(rho)
+    mds = MDS(n_components=n_components, dissimilarity='precomputed',
+              random_state=seed, n_init=10, max_iter=500)
+    coords = mds.fit_transform(D)
+    return names, coords, D, mds.stress_
+
+
+def rsa_mds_composite(between_log, between_pen, rdms_log, rdms_pen,
+                      exclude=("CLIP",), seed=42):
+    """Cross-model RSA matrices and 2-D MDS embeddings for the RSA/MDS composite
+    figure (paper Fig. 3), rendered by plotting.plot_rsa_mds_composite.
+
+    Returns a dict; each value is a tuple:
+      rsa_pen, rsa_log : (names, [K, K] Spearman-rho matrix)
+      mds_pen, mds_log : (names, coords [K, 2], D [K, K], stress)
+    """
+    return {
+        "rsa_pen": build_rsa_matrix(between_pen, exclude),
+        "rsa_log": build_rsa_matrix(between_log, exclude),
+        "mds_pen": build_mds_coords(rdms_pen, seed, exclude),
+        "mds_log": build_mds_coords(rdms_log, seed, exclude),
+    }
+
+
+def convrnn_supplement(X_before, X_after, labels, max_k=50):
+    """Inputs for the ConvRNN input-on vs final supplement figure (paper Fig. 4),
+    rendered by plotting.plot_convrnn_supplement. Returns a dict:
+      delta        [N]       per-exemplar cluster-size change (after - before)
+      knn_before   (ks, pct) k-NN category preservation curve, before
+      knn_after    (ks, pct) k-NN category preservation curve, after
+      pca_baseline [C, 2]    before prototypes in the before-cloud PCA space
+      pca_after    [C, 2]    after prototypes in that SAME PCA space
+      shifts       [C]       per-category prototype shift (1 - cosine)
+    """
+    from sklearn.decomposition import PCA
+
+    labels_t = torch.as_tensor(labels)
+    classes = torch.unique(labels_t, sorted=True).tolist()
+    Xb, Xa = to_feat(X_before).float(), to_feat(X_after).float()
+    prot_b = compute_prototypes(Xb, labels_t, classes)
+    prot_a = compute_prototypes(Xa, labels_t, classes)
+    d_b = exemplar_proto_dists(Xb, prot_b, labels_t, metric="cosine")
+    d_a = exemplar_proto_dists(Xa, prot_a, labels_t, metric="cosine")
+    pca = PCA(n_components=2).fit(Xb.cpu().numpy())
+    return {
+        "delta": d_a - d_b,
+        "knn_before": category_preservation_knn(Xb, labels_t, max_k=max_k),
+        "knn_after": category_preservation_knn(Xa, labels_t, max_k=max_k),
+        "pca_baseline": pca.transform(prot_b.cpu().numpy()),
+        "pca_after": pca.transform(prot_a.cpu().numpy()),
+        "shifts": prototype_shifts(prot_b, prot_a),
+    }
+
+
+def top1_accuracy_bars(features, labels, exclude=("CLIP",)):
+    """Per-model top-1 accuracy (from logits) for the accuracy-bar figure,
+    rendered by plotting.plot_top1_accuracy_bars.
+
+    Returns a list of (model, [(state, acc), ...]) in MODEL_ORDER; recurrent
+    models have two entries (baseline, after), feedforward models one.
+    """
+    labels_t = torch.as_tensor(labels)
+    bars = []
+    for model in MODEL_ORDER:
+        if model in exclude:
+            continue
+        rep_dict = features.get(model, {}).get("logits", {})
+        states = []
+        for state in ["baseline", "after"]:
+            logits = rep_dict.get(state)
+            if logits is None:
+                continue
+            acc = (torch.as_tensor(logits).float().argmax(dim=1) == labels_t
+                   ).float().mean().item() * 100.0
+            states.append((state, acc))
+        if states:
+            bars.append((model, states))
+    return bars
 
 
 def compute_effective_dims(features, rep="logits", labels=None, on_prototypes=False):

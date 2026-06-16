@@ -6,15 +6,16 @@ path when save_path is given.
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
-from scipy.stats import gaussian_kde, spearmanr
+from scipy.stats import gaussian_kde
 
-from .config import MODEL_ORDER, MODEL_COLOR_MAP, DISPLAY_NAMES, RECURRENT_MODELS, \
-    pick_color, ordered_model_names
-from .geometry import to_feat, compute_prototypes, exemplar_proto_dists, rdm_vec_upper
+# plotting.py renders precomputed results only — it imports the model registry
+# (names/colors/order) but NO analysis functions. All geometry/stats live in
+# repgeo.analysis / repgeo.geometry and are passed in as data.
+from .config import (MODEL_ORDER, MODEL_COLOR_MAP, DISPLAY_NAMES,
+                     RECURRENT_MODELS, pick_color)
 
 # Embed fonts as editable text in PDFs (journal requirement)
 mpl.rcParams['pdf.fonttype'] = 42
@@ -188,32 +189,22 @@ DEFAULT_MECHANISM_ANNOTATIONS = {
 }
 
 
-def plot_local_global_composite(features, labels, rep="logits",
-                                models=tuple(RECURRENT_MODELS),
-                                rep_overrides=None, annotations=None,
+def plot_local_global_composite(composite_data, annotations=None,
                                 save_path=None, figsize=None, show=True):
-    """3-row composite per recurrent model:
-      row 0 mechanism annotation, row 1 local cluster-size-change KDE,
-      row 2 PCA of prototype shifts (PCA fitted on baseline activations).
-    """
-    from sklearn.decomposition import PCA
+    """3-row composite per recurrent model, rendered from precomputed data
+    (analysis.local_global_composite_data): row 0 mechanism annotation,
+    row 1 local cluster-size-change KDE, row 2 PCA of prototype shifts.
 
-    rep_overrides = rep_overrides or {}
+    The plotting layer does NO analysis — pass the dict returned by
+    analysis.local_global_composite_data.
+    """
     annotations = annotations or DEFAULT_MECHANISM_ANNOTATIONS
     C_BASE, C_AFTER, C_FILL = '#555555', '#E41A1C', '#cccccc'
 
-    labels_t = torch.as_tensor(labels)
-    classes = torch.unique(labels_t, sorted=True).tolist()
-
-    avail = []
-    for m in models:
-        m_rep = rep_overrides.get(m, rep)
-        if "baseline" in features.get(m, {}).get(m_rep, {}) \
-                and "after" in features[m][m_rep]:
-            avail.append(m)
+    avail = list(composite_data)
     n_cols = len(avail)
     if n_cols == 0:
-        print("No recurrent models with both states found.")
+        print("No models in composite_data.")
         return
 
     figsize = figsize or (4.0 * n_cols, 9.0)
@@ -222,25 +213,14 @@ def plot_local_global_composite(features, labels, rep="logits",
                           hspace=0.3, wspace=0.28,
                           top=0.91, bottom=0.10, left=0.09, right=0.93)
 
-    # precompute deltas so the KDE row shares one x-axis
-    model_data = {}
-    for model in avail:
-        m_rep = rep_overrides.get(model, rep)
-        X_b = to_feat(features[model][m_rep]["baseline"]).float()
-        X_a = to_feat(features[model][m_rep]["after"]).float()
-        prot_b = compute_prototypes(X_b, labels_t, classes)
-        prot_a = compute_prototypes(X_a, labels_t, classes)
-        d_b = exemplar_proto_dists(X_b, prot_b, labels_t, metric="cosine")
-        d_a = exemplar_proto_dists(X_a, prot_a, labels_t, metric="cosine")
-        model_data[model] = dict(X_b=X_b, prot_b=prot_b, prot_a=prot_a, delta=d_a - d_b)
-
-    all_delta = np.concatenate([md['delta'] for md in model_data.values()])
+    all_delta = np.concatenate([composite_data[m]["delta"] for m in avail])
     pad_d = (all_delta.max() - all_delta.min()) * 0.08
     shared_xmin, shared_xmax = float(all_delta.min()) - pad_d, float(all_delta.max()) + pad_d
 
     axes_kde, axes_pca = {}, {}
     for col, model in enumerate(avail):
-        md = model_data[model]
+        md = composite_data[model]
+        delta = md["delta"]
 
         ax_ann = fig.add_subplot(gs[0, col])
         ax_ann.axis('off')
@@ -253,11 +233,11 @@ def plot_local_global_composite(features, labels, rep="logits",
         ax_kde = fig.add_subplot(gs[1, col])
         axes_kde[col] = ax_kde
         x_grid = np.linspace(shared_xmin, shared_xmax, 400)
-        density = gaussian_kde(md['delta'])(x_grid)
+        density = gaussian_kde(delta)(x_grid)
         ax_kde.fill_between(x_grid, density, color=C_FILL, alpha=0.6)
         ax_kde.plot(x_grid, density, color='#888888', lw=1.0)
         ax_kde.axvline(0, color='black', lw=1.5, ls='-', zorder=0)
-        mean_d = float(md['delta'].mean())
+        mean_d = float(delta.mean())
         ax_kde.axvline(mean_d, color='red', lw=2, ls='--', zorder=5)
 
         ax_kde.set_xlim(shared_xmin, shared_xmax)
@@ -283,13 +263,11 @@ def plot_local_global_composite(features, labels, rep="logits",
                                         lw=1.0, mutation_scale=12))
         ax_kde.set_xlabel('Δ cluster size (cosine)', fontsize=16)
 
-        # ---- global: PCA of prototype shifts ----
+        # ---- global: PCA of prototype shifts (precomputed) ----
         ax_pca = fig.add_subplot(gs[2, col])
         axes_pca[col] = ax_pca
-        pca = PCA(n_components=2)
-        pca.fit(md['X_b'].cpu().numpy())
-        pb = pca.transform(md['prot_b'].cpu().numpy())
-        pm = pca.transform(md['prot_a'].cpu().numpy())
+        pb = md["pca_baseline"]
+        pm = md["pca_after"]
 
         for i in range(pb.shape[0]):
             ax_pca.plot([pb[i, 0], pm[i, 0]], [pb[i, 1], pm[i, 1]],
@@ -341,31 +319,15 @@ def plot_local_global_composite(features, labels, rep="logits",
     _save_show(fig, save_path, show=show)
 
 
-def plot_top1_accuracy_bars(features, labels, exclude=("CLIP",), figsize=None,
-                            save_path=None, title="ImageNet Top-1 Accuracy (from logits)",
+def plot_top1_accuracy_bars(bars_data, figsize=None, save_path=None,
+                            title="ImageNet Top-1 Accuracy (from logits)",
                             show_title=True, show=True):
-    """Grouped bar plot of top-1 accuracy from logits.
+    """Grouped bar plot of top-1 accuracy from precomputed per-model bars
+    (analysis.top1_accuracy_bars).
 
     Recurrent models get two bars (baseline solid, after lighter with a
     dashed edge — mirroring the ridge-plot line styles).
     """
-    labels_t = torch.as_tensor(labels)
-
-    bars_data = []
-    for model in MODEL_ORDER:
-        if model in exclude:
-            continue
-        rep_dict = features.get(model, {}).get("logits", {})
-        states = []
-        for state in ["baseline", "after"]:
-            logits = rep_dict.get(state)
-            if logits is None:
-                continue
-            acc = (torch.as_tensor(logits).float().argmax(dim=1) == labels_t
-                   ).float().mean().item() * 100.0
-            states.append((state, acc))
-        if states:
-            bars_data.append((model, states))
     if not bars_data:
         return
 
@@ -420,47 +382,14 @@ def plot_top1_accuracy_bars(features, labels, exclude=("CLIP",), figsize=None,
 
 
 # ----------------------------------------------------------------- RSA / MDS
-def build_rsa_matrix(between_dict, exclude=()):
-    """KxK Spearman-rho matrix across models from between-prototype vectors."""
-    names = [n for n in ordered_model_names(between_dict.keys())
-             if n.split()[0] not in exclude]
-    K = len(names)
-    vecs = [between_dict[n] for n in names]
-    rsa = np.zeros((K, K), dtype=np.float32)
-    for i in range(K):
-        for j in range(K):
-            rho, _ = spearmanr(vecs[i], vecs[j])
-            rsa[i, j] = np.nan_to_num(rho)
-    return names, rsa
-
-
-def build_mds_coords(rdms, seed=42, exclude=(), n_components=2):
-    """MDS embedding of models; distance = 1 - Spearman rho between RDMs."""
-    from sklearn.manifold import MDS
-
-    names = [n for n in ordered_model_names(rdms.keys())
-             if n.split()[0] not in exclude]
-    K = len(names)
-    vecs = [rdm_vec_upper(rdms[n]) for n in names]
-    D = np.zeros((K, K))
-    for i in range(K):
-        for j in range(i + 1, K):
-            rho, _ = spearmanr(vecs[i], vecs[j])
-            D[i, j] = D[j, i] = 1.0 - np.nan_to_num(rho)
-    mds = MDS(n_components=n_components, dissimilarity='precomputed',
-              random_state=seed, n_init=10, max_iter=500)
-    coords = mds.fit_transform(D)
-    return names, coords, D, mds.stress_
-
-
-def plot_rsa_mds_composite(between_log, between_pen, rdms_log, rdms_pen,
-                           exclude=("CLIP",), save_path=None, seed=42, show=True):
-    """2x2 composite: cross-model RSA heatmaps (top) and model MDS (bottom),
-    each for penultimate (left) and logits (right)."""
-    names_rsa_log, rsa_log = build_rsa_matrix(between_log, exclude)
-    names_rsa_pen, rsa_pen = build_rsa_matrix(between_pen, exclude)
-    names_mds_log, coords_log, D_log, stress_log = build_mds_coords(rdms_log, seed, exclude)
-    names_mds_pen, coords_pen, D_pen, stress_pen = build_mds_coords(rdms_pen, seed, exclude)
+def plot_rsa_mds_composite(data, save_path=None, show=True):
+    """2x2 composite from precomputed RSA/MDS data (analysis.rsa_mds_composite):
+    cross-model RSA heatmaps (top) and model MDS (bottom), each for penultimate
+    (left) and logits (right)."""
+    names_rsa_pen, rsa_pen = data["rsa_pen"]
+    names_rsa_log, rsa_log = data["rsa_log"]
+    names_mds_pen, coords_pen, _, _ = data["mds_pen"]
+    names_mds_log, coords_log, _, _ = data["mds_log"]
 
     fig = plt.figure(figsize=(15, 13.5))
     gs = GridSpec(2, 3, figure=fig, width_ratios=[1, 1, 0.04], height_ratios=[1, 1],
@@ -529,18 +458,13 @@ def plot_rsa_mds_composite(between_log, between_pen, rdms_log, rdms_pen,
         ax.set_title(f"Model MDS — {subtitle}", fontsize=14, pad=10)
 
     _save_show(fig, save_path, dpi=300, show=show)
-    return {
-        'rsa_log': rsa_log, 'rsa_pen': rsa_pen,
-        'mds_log': (names_mds_log, coords_log, D_log, stress_log),
-        'mds_pen': (names_mds_pen, coords_pen, D_pen, stress_pen),
-    }
 
 
-def plot_model_mds_3d(rdms, title, seed=42, save_html=None, show=True):
-    """Interactive 3-D model MDS (plotly); same metric as the 2-D version."""
+def plot_model_mds_3d(names, coords, title, stress=None, save_html=None, show=True):
+    """Interactive 3-D model MDS (plotly) from precomputed names + coords
+    (analysis.build_mds_coords with n_components=3)."""
     import plotly.graph_objects as go
 
-    names, coords, D, stress = build_mds_coords(rdms, seed=seed, n_components=3)
     colors = [pick_color(n) or '#888888' for n in names]
     displays = [DISPLAY_NAMES.get(n, n) for n in names]
 
@@ -568,9 +492,9 @@ def plot_model_mds_3d(rdms, title, seed=42, save_html=None, show=True):
                 colorscale=[[0, arrow_color], [1, arrow_color]],
                 showscale=False, showlegend=False, hoverinfo='skip'))
 
+    title_txt = title if stress is None else f"{title}<br><sub>stress = {stress:.2f}</sub>"
     fig.update_layout(
-        title=dict(text=f"{title}<br><sub>stress = {stress:.2f}</sub>",
-                   x=0.5, font=dict(size=14)),
+        title=dict(text=title_txt, x=0.5, font=dict(size=14)),
         scene=dict(xaxis=dict(visible=False), yaxis=dict(visible=False),
                    zaxis=dict(visible=False), bgcolor='white'),
         width=750, height=650, margin=dict(l=10, r=10, t=60, b=10))
@@ -580,7 +504,6 @@ def plot_model_mds_3d(rdms, title, seed=42, save_html=None, show=True):
         print(f"Saved -> {save_html}")
     if show:
         fig.show()
-    return names, coords, D
 
 
 # ------------------------------------------------------- untrained (multi-seed)
@@ -678,33 +601,20 @@ def plot_separation_ridge_multiseed(seeded_between_dict,
     _save_show(fig, save_path, show=show)
 
 
-def plot_local_global_composite_seeded(seeded_features, labels, rep="logits",
-                                       models=tuple(RECURRENT_MODELS),
-                                       rep_overrides=None, annotations=None,
+def plot_local_global_composite_seeded(composite_data, annotations=None,
                                        save_path=None, figsize=None,
-                                       seed_for_pca=0, band="sd", show=True):
-    """Multi-seed variant of plot_local_global_composite.
+                                       band="sd", show=True):
+    """Multi-seed variant of plot_local_global_composite, from precomputed data
+    (untrained.local_global_composite_seeded).
 
-    The local KDE row shows the mean across seeds with a variability band;
-    the global PCA row uses one representative seed, because each seed has
-    its own random weights and therefore its own PCA basis.
+    The local KDE row shows the mean across seeds with a variability band; the
+    global PCA row uses one representative seed (chosen in the data step,
+    because each seed has its own random weights and PCA basis).
     """
-    from sklearn.decomposition import PCA
-
-    rep_overrides = rep_overrides or {}
     annotations = annotations or DEFAULT_MECHANISM_ANNOTATIONS
     C_BASE, C_AFTER, C_FILL = "#555555", "#E41A1C", "#cccccc"
 
-    labels_t = torch.as_tensor(labels)
-    classes = torch.unique(labels_t, sorted=True).tolist()
-
-    avail = []
-    for m in models:
-        m_rep = rep_overrides.get(m, rep)
-        if any("baseline" in sf.get(m, {}).get(m_rep, {})
-               and "after" in sf.get(m, {}).get(m_rep, {})
-               for sf in seeded_features.values()):
-            avail.append(m)
+    avail = list(composite_data)
     n_cols = len(avail)
     if n_cols == 0:
         print("No recurrent models with both baseline & after across seeds.")
@@ -716,24 +626,7 @@ def plot_local_global_composite_seeded(seeded_features, labels, rep="logits",
                           hspace=0.3, wspace=0.28,
                           top=0.91, bottom=0.10, left=0.09, right=0.93)
 
-    per_model = {m: [] for m in avail}
-    all_deltas = []
-    for model in avail:
-        m_rep = rep_overrides.get(model, rep)
-        for seed, models_dict in seeded_features.items():
-            d = models_dict.get(model, {}).get(m_rep, {})
-            if "baseline" not in d or "after" not in d:
-                continue
-            X_b = to_feat(d["baseline"]).float()
-            X_a = to_feat(d["after"]).float()
-            prot_b = compute_prototypes(X_b, labels_t, classes)
-            prot_a = compute_prototypes(X_a, labels_t, classes)
-            delta = (exemplar_proto_dists(X_a, prot_a, labels_t, metric="cosine")
-                     - exemplar_proto_dists(X_b, prot_b, labels_t, metric="cosine"))
-            per_model[model].append((seed, X_b, prot_b, prot_a, delta))
-            all_deltas.append(delta)
-
-    all_delta = np.concatenate(all_deltas)
+    all_delta = np.concatenate([d for m in avail for d in composite_data[m]["deltas"]])
     pad_d = (all_delta.max() - all_delta.min()) * 0.08
     shared_xmin = float(all_delta.min()) - pad_d
     shared_xmax = float(all_delta.max()) + pad_d
@@ -750,7 +643,7 @@ def plot_local_global_composite_seeded(seeded_features, labels, rep="logits",
         # local KDE: mean across seeds + band
         ax_kde = fig.add_subplot(gs[1, col])
         axes_kde[col] = ax_kde
-        deltas = [tup[4] for tup in per_model[model]]
+        deltas = composite_data[model]["deltas"]
         x_grid = np.linspace(shared_xmin, shared_xmax, 400)
         densities = np.stack([gaussian_kde(d)(x_grid) for d in deltas])
         mean_y = densities.mean(axis=0)
@@ -793,16 +686,11 @@ def plot_local_global_composite_seeded(seeded_features, labels, rep="logits",
                                         lw=1.0, mutation_scale=12))
         ax_kde.set_xlabel("Δ cluster size (cosine)", fontsize=16)
 
-        # global PCA: representative seed
+        # global PCA: representative seed (precomputed)
         ax_pca = fig.add_subplot(gs[2, col])
         axes_pca[col] = ax_pca
-        entry = next((t for t in per_model[model] if t[0] == seed_for_pca),
-                     per_model[model][0])
-        _, X_b, prot_b, prot_a, _ = entry
-        pca = PCA(n_components=2)
-        pca.fit(X_b.cpu().numpy())
-        pb = pca.transform(prot_b.cpu().numpy())
-        pa = pca.transform(prot_a.cpu().numpy())
+        pb = composite_data[model]["pca_baseline"]
+        pa = composite_data[model]["pca_after"]
 
         for i in range(pb.shape[0]):
             ax_pca.plot([pb[i, 0], pa[i, 0]], [pb[i, 1], pa[i, 1]],
@@ -852,36 +740,28 @@ def plot_local_global_composite_seeded(seeded_features, labels, rep="logits",
     _save_show(fig, save_path, show=show)
 
 
-def plot_convrnn_supplement(X_before, X_after, labels,
-                            before_label="Image on (t=12)", after_label="Final (t=17)",
-                            max_k=50, save_path=None, show=True):
-    """Supplement figure (paper Fig. 4): ConvRNN input-on vs final state.
+def plot_convrnn_supplement(data, before_label="Image on (t=12)",
+                            after_label="Final (t=17)", save_path=None, show=True):
+    """Supplement figure (paper Fig. 4): ConvRNN input-on vs final state, from
+    precomputed data (analysis.convrnn_supplement).
 
     Four panels, left to right:
       (a) local cluster-size change KDE (after - before)
       (b) k-NN category preservation curve, before vs after
-      (c) PCA of prototype shifts (PCA fit on the before cloud)
+      (c) PCA of prototype shifts
       (d) histogram of per-category prototype shift magnitude
     """
-    from sklearn.decomposition import PCA
-    from repgeo.geometry import (
-        compute_prototypes, exemplar_proto_dists, category_preservation_knn,
-        prototype_shifts)
-
     C_BEFORE, C_AFTER = '#555555', '#E41A1C'
-    labels_t = torch.as_tensor(labels)
-    classes = torch.unique(labels_t, sorted=True).tolist()
-    Xb, Xa = to_feat(X_before).float(), to_feat(X_after).float()
-    prot_b = compute_prototypes(Xb, labels_t, classes)
-    prot_a = compute_prototypes(Xa, labels_t, classes)
+    diff = data["delta"]
+    ks_b, cp_b = data["knn_before"]
+    ks_a, cp_a = data["knn_after"]
+    Pb, Pa = data["pca_baseline"], data["pca_after"]
+    shifts = data["shifts"]
 
     fig, axes = plt.subplots(1, 4, figsize=(18, 4.2))
 
     # (a) cluster-size change KDE
     ax = axes[0]
-    d_b = exemplar_proto_dists(Xb, prot_b, labels_t, metric="cosine")
-    d_a = exemplar_proto_dists(Xa, prot_a, labels_t, metric="cosine")
-    diff = d_a - d_b
     mean_d = float(diff.mean())
     pad = (diff.max() - diff.min()) * 0.08
     xs = np.linspace(diff.min() - pad, diff.max() + pad, 400)
@@ -910,8 +790,6 @@ def plot_convrnn_supplement(X_before, X_after, labels,
 
     # (b) k-NN category preservation
     ax = axes[1]
-    ks_b, cp_b = category_preservation_knn(Xb, labels_t, max_k=max_k)
-    ks_a, cp_a = category_preservation_knn(Xa, labels_t, max_k=max_k)
     ax.plot(ks_a, cp_a, color=C_AFTER, lw=3, label=after_label)
     ax.plot(ks_b, cp_b, color=C_BEFORE, lw=3, ls="--", label=before_label)
     ax.set_title("Local Category Preservation (k-NN)", fontsize=14)
@@ -924,9 +802,6 @@ def plot_convrnn_supplement(X_before, X_after, labels,
 
     # (c) PCA of prototype shifts
     ax = axes[2]
-    pca = PCA(n_components=2).fit(Xb.cpu().numpy())
-    Pb = pca.transform(prot_b.cpu().numpy())
-    Pa = pca.transform(prot_a.cpu().numpy())
     for i in range(Pb.shape[0]):
         ax.plot([Pb[i, 0], Pa[i, 0]], [Pb[i, 1], Pa[i, 1]],
                 color="#bbbbbb", lw=0.9, alpha=0.8, zorder=1)
@@ -956,7 +831,6 @@ def plot_convrnn_supplement(X_before, X_after, labels,
 
     # (d) prototype shift histogram
     ax = axes[3]
-    shifts = prototype_shifts(prot_b, prot_a)
     mean_s = float(shifts.mean())
     ax.hist(shifts, bins=30, color="#cccccc", edgecolor="#333333", linewidth=0.6, alpha=0.9)
     ax.axvline(mean_s, color=C_AFTER, ls="--", lw=1.8, label=f"Mean = {mean_s:.3f}")

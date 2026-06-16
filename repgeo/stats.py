@@ -24,7 +24,8 @@ import torch
 
 from .analysis import get_pair
 from .config import RECURRENT_MODELS, DEFAULT_REP, REP_OVERRIDES
-from .geometry import to_feat, compute_prototypes, exemplar_proto_dists, rdm_cosine
+from .geometry import (to_feat, compute_prototypes, exemplar_proto_dists,
+                       between_proto_pct_change)
 
 
 def local_cluster_lme(d_baseline, d_after, labels):
@@ -82,19 +83,22 @@ def run_local_lme_tests(features, labels, models=None):
 
 
 def _mean_pairwise_pct_change(X_b, X_a, labels_t, classes, iu):
-    """Mean of per-pair % distance changes on centered prototypes."""
+    """Permutation-loop statistic: compute prototypes from the (possibly
+    swapped) activations, then defer to the SAME shared primitive used by the
+    geometry summary table, so the null distribution and the reported
+    Δ Between-Proto (%) are guaranteed identical."""
     prot_b = compute_prototypes(X_b, labels_t, classes)
     prot_a = compute_prototypes(X_a, labels_t, classes)
-    prot_b = prot_b - prot_b.mean(0, keepdim=True)
-    prot_a = prot_a - prot_a.mean(0, keepdim=True)
-    vec_b = rdm_cosine(prot_b).cpu().numpy()[iu]
-    vec_a = rdm_cosine(prot_a).cpu().numpy()[iu]
-    mask = vec_b > 1e-12
-    return float(np.mean((vec_a[mask] - vec_b[mask]) / vec_b[mask] * 100.0))
+    return between_proto_pct_change(prot_b, prot_a, iu)
 
 
 def between_separation_permutation(X_base, X_after, labels, n_perm=10000, seed=42):
     """Permutation test for change in between-prototype separation.
+
+    The test statistic is about the percentage change in centered between-prototype
+    cosine distance (i.e. the same `Δ Between-Proto (%)` value reported in the
+    geometry summary table), NOT significance of the raw distance change. 
+    So the p-value certifies the reported percentage effect.
 
     Null distribution: baseline/after activations swapped independently per
     exemplar, centered prototypes recomputed, mean per-pair % change taken.

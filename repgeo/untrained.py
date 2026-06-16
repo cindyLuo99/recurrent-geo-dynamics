@@ -231,6 +231,52 @@ def compute_seeded_within_dict(seeded_features, labels, rep="logits"):
     return out
 
 
+def local_global_composite_seeded(seeded_features, labels, rep="logits",
+                                  models=None, rep_overrides=None, seed_for_pca=0):
+    """Inputs for the multi-seed local/global composite (untrained supplement),
+    rendered by plotting.plot_local_global_composite_seeded.
+
+    For each recurrent model with both states in at least one seed, returns:
+      deltas        list of [N] per-exemplar cluster-size changes, one per seed
+      pca_baseline  [C, 2] before prototypes (representative seed) in that
+                          seed's baseline-activation PCA space
+      pca_after     [C, 2] after prototypes (representative seed) in that space
+    """
+    from sklearn.decomposition import PCA
+    from .config import RECURRENT_MODELS
+
+    models = models or RECURRENT_MODELS
+    rep_overrides = rep_overrides or {}
+    labels_t = torch.as_tensor(labels)
+    classes = torch.unique(labels_t, sorted=True).tolist()
+
+    out = {}
+    for model in models:
+        m_rep = rep_overrides.get(model, rep)
+        deltas, pca_coords = [], None
+        for seed, models_dict in seeded_features.items():
+            d = models_dict.get(model, {}).get(m_rep, {})
+            if "baseline" not in d or "after" not in d:
+                continue
+            X_b = to_feat(d["baseline"]).float()
+            X_a = to_feat(d["after"]).float()
+            prot_b = compute_prototypes(X_b, labels_t, classes)
+            prot_a = compute_prototypes(X_a, labels_t, classes)
+            deltas.append(
+                exemplar_proto_dists(X_a, prot_a, labels_t, metric="cosine")
+                - exemplar_proto_dists(X_b, prot_b, labels_t, metric="cosine"))
+            # representative seed for the PCA panel: seed_for_pca if present, else the first
+            if pca_coords is None or seed == seed_for_pca:
+                pca = PCA(n_components=2).fit(X_b.cpu().numpy())
+                pca_coords = (pca.transform(prot_b.cpu().numpy()),
+                              pca.transform(prot_a.cpu().numpy()))
+        if deltas:
+            out[model] = {"deltas": deltas,
+                          "pca_baseline": pca_coords[0],
+                          "pca_after": pca_coords[1]}
+    return out
+
+
 METRICS = ["Δ Cluster Size", "Δ Cluster Size (%)", "Avg Proto Shift",
            "Δ Between-Proto (%)", "Proto RDM ρ"]
 

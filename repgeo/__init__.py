@@ -27,6 +27,8 @@ from .loading import (                                              # noqa: F401
 from .analysis import (                                             # noqa: F401
     accuracy_table, compute_cluster_sizes_and_rdms, build_prototype_rdms,
     compute_effective_dims, between_prototype_summary, geometry_summary_table,
+    local_global_composite, rsa_mds_composite, build_rsa_matrix, build_mds_coords,
+    top1_accuracy_bars, convrnn_supplement,
 )
 from .stats import (                                                # noqa: F401
     run_local_lme_tests, run_global_permutation_tests,
